@@ -6,7 +6,7 @@ set_rule()
 	val=$2
 
 	#echo $key $val
-	ret=`etcdctl --user=waf --password=waf put ${key} ${val} --endpoints=\"127.0.0.1:80\"`
+	ret=`etcdctl --user=waf --password=waf put ${key} ${val} --endpoints=\"192.168.108.113:2379\"`
 	echo $ret
 }
 
@@ -14,7 +14,7 @@ unset_rule()
 {
 	key=$1
 	#echo $key 
-	cmd="etcdctl --user=waf --password=waf del ${key} --endpoints=\"127.0.0.1:80\""
+	cmd="etcdctl --user=waf --password=waf del ${key} --endpoints=\"192.168.108.113:2379\""
 	echo $cmd
 	return `$cmd`
 
@@ -50,13 +50,13 @@ sample_test_rule()
 	sleep 1s
 	set_rule ${key} ${val}
 
-	sleep 1s
+	sleep 3s
 	send_req $@
 	res_status=$?
 	echo "ret:" ${res_status} "verify: "${status}
 	if test $[res_status] -eq $[status]
 	then
-		echo "test ${key} ${val} OK!"
+		echo "test rule ${key} ${val} OK!"
 	else
 		echo "test ${key} ${val} Faliure!"
 	fi
@@ -67,10 +67,11 @@ sample_test_rule()
 	res_status=$?
 	if test $[res_status] -ne $[status]
 	then
-		echo "check ${key} ${val} OK!"
+		echo "check delete ${key} ${val} OK!"
 	else
 		echo "test ${key} ${val} Faliure!"
 	fi
 }
 
-sample_test_rule /waf/service/fastacl/prd/t1/ip+host+path:6664a229f7b313a62c238bc811559496 \"1.1.1.1www.test.com/api\" 204 http://192.168.108.112/api www.test.com waf-test 1.1.1.1
+#sample_test_rule /waf/service/fastacl/prd/t2/var-ip+var-host+var-path:6664a229f7b313a62c238bc811559496 \"1.1.1.1www.test.com/api\" 204 http://192.168.108.112/api www.test.com waf-test 1.1.1.1
+sample_test_rule /waf/service/fastacl/prd/t2/var-ip+var-host+var-path+rca-_m:53d676717d97090c5f0f5fc399a045dc \"1.1.1.1www.test.com/apidevice\" 204 http://192.168.108.112/api?_m=device www.test.com waf-test 1.1.1.1

@@ -2,10 +2,10 @@ local _M = {}
 
 local etcd_conf = {
 protocol = "v3", api_prefix="/v3", ssl_verify=false, 
-http_host = "http://127.0.0.1:2379", 
+http_host = "http://192.168.108.113:2379", 
 user = "waf", password="waf", serializer="raw"
 }
-local etcd_key = "/waf/service/fastacl/prd/t1"
+local etcd_key = "/waf/service/fastacl/prd/t2"
 
 local types_dict_name = "fastacl_types_zone"
 local block_dict_name = "fastacl_block_zone"
@@ -93,7 +93,7 @@ local function block_hash_insert(key, value, block_type)
 		thash:set(block_type, 1)
 		ngx.log(ngx.ERR,"types set Key: ", block_type)
 	else 
-		local nval, err = thash:incr(block_type)
+		local nval, err = thash:incr(block_type, 1)
 		ngx.log(ngx.ERR,"types : ", blocak_type, " count: ", nval)
 	end
 
@@ -104,14 +104,14 @@ local function block_hash_delete(key, value, block_type)
 	local shash = ngx.shared[block_dict_name]
 	local val = shash:get(value)
 	if val then
-		if val == block_type then
+		if val == key then
 			shash:delete(value)
-			ngx.log(ngx.ERR,"delete : ", value, " val: ", val, " success!")
+			ngx.log(ngx.ERR,"delete : ", key, " val: ", val, " success!")
 		else 
-			ngx.log(ngx.ERR,"conflict key: ", value, " old value: ", val, " del value: ", block_type)
+			ngx.log(ngx.ERR,"conflict key: ", key, " val: ", val, " value: ", value)
 		end
 	else
-		ngx.log(ngx.ERR,"Not found Key: ", value, " Val: ", block_type)
+		ngx.log(ngx.ERR,"Not found Key: ", value, " Val: ", value)
 	end
 	
 	-- clean types dict zone
@@ -128,6 +128,9 @@ local function block_hash_delete(key, value, block_type)
 
 end
 local function process_item(key, value, opt)
+	if value == nil or key == nil then
+		return 
+	end
 	local key_table = string_split(key, ":")
 	if #key_table ~= 2 then
 		ngx.log(ngx.ERR,"rule key name split failed: ", key)
@@ -142,7 +145,7 @@ local function process_item(key, value, opt)
 		block_hash_insert(key, value, block_type)
 	else 
 		if opt == "del" then
-			block_hash_delete(key, value)
+			block_hash_delete(key, value, block_type)
 		else 
 			ngx.log(ngx.ERR, "opt ", opt, " not support")
 		end
@@ -164,6 +167,9 @@ local function init_from_etcd()
                 ngx.log(ngx.ERR,"dir_res ", k, " ", v)
         end
 
+	if dir_res.kvs == nil then
+		return
+	end
         for _, item in ipairs(dir_res.kvs) do
                 local key = short_key(etcd_key, item.key)
                 ngx.log(ngx.ERR,"item key: ", item.key, " short key: ", key, " value: ", item.value)
@@ -367,6 +373,7 @@ end
 local function get_var_content(key, vars, request_uri_args, request_headers, request_common_args)
 	local vtab = string_split(key, "-")
 	if #vtab ~= 2 then
+		ngx.log(ngx.ERR, "key format error: ", key)
 		return ""
 	end
 	local var_type = vtab[1]
@@ -374,25 +381,29 @@ local function get_var_content(key, vars, request_uri_args, request_headers, req
 	if var_type == "var" then
 		if var_name == "ip" then
 			return vars.remote_addr
-		else if var_name == "host" then
+		elseif var_name == "host" then
 			return vars.host
-		else if var_name == "path" then
+		elseif var_name == "path" then
 			return vars.uri
 		end
-	else if var_type == "rh" then
+	elseif var_type == "rh" then
 		return request_headers[var_name]
-	else if var_type == "rca" then
+	elseif var_type == "rca" then
 		return request_common_args[var_name]
-	else if var_type == "rua" then
+	elseif var_type == "rua" then
 		return request_uri_args[var_name]
 	end
 	return ""
 end
 local function construct_serach_key(key, vars, request_uri_args, request_headers, request_common_args)
-	local var_talbe = string_split(key, "+")
+	local var_table = string_split(key, "+")
+	if #var_table == 0 then
+		ngx.log(ngx.ERR, "key format error: ", key)
+		return ""
+	end
 	local rkey = ""
 	for i=1, #var_table do
-		rkey = rkey .. get_var_content(var_table[i])
+		rkey = rkey .. get_var_content(var_table[i], vars, request_uri_args, request_headers, request_common_args)
 	end
 	return rkey
 		
