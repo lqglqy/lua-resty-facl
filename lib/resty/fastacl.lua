@@ -1,25 +1,4 @@
 local _M = {}
-local _var_def = {
-ip = 0x01, 
-host = 0x02, 
-path = 0x04, 
-ua = 0x08, 
-token = 0x10, 
-query_m = 0x20, 
-device_id = 0x40, 
-referer = 0x80,
-}
-
-local _key_def = {
-[1] = "ip",
-[2] = "host",
-[3] = "path",
-[4] = "ua",
-[5] = "token",
-[6] = "query_m",
-[7] = "device_id",
-[8] = "referer",
-}
 
 local etcd_conf = {
 protocol = "v3", api_prefix="/v3", ssl_verify=false, 
@@ -93,53 +72,59 @@ local function string_split (inputstr, sep)
         return t
 end
 
-local function block_hash_insert(key, value, key_mark, block_type)
+local function block_hash_insert(key, value, block_type)
 		
 	local shash = ngx.shared[block_dict_name]
 	local val = shash:get(value)
 	if val then
-		if val == key_mark then
-			ngx.log(ngx.ERR,"alread set key in dict: ", value, " mark: ", val)
+		if val == value then
+			ngx.log(ngx.ERR,"alread set key in dict: ", value, " value: ", val)
 		else 
-			ngx.log(ngx.ERR,"conflict key: ", value, " old mark: ", val, " new mark: ", key_mark)
+			ngx.log(ngx.ERR,"conflict key: ", value, " old value: ", val, " new value: ", key_mark)
 		end
 	else
-		shash:set(value, key_mark)
-		ngx.log(ngx.ERR,"block set Key: ", value, " Val: ", key_mark, " success!!!")
+		shash:set(value, key)
+		ngx.log(ngx.ERR,"block set Key: ", value, " Val: ", key, " success!!!")
 	end
 	
 	local thash = ngx.shared[types_dict_name]
 	local tval = thash:get(block_type)
 	if not tval then
-		thash:set(block_type, key_mark)
-		ngx.log(ngx.ERR,"types set Key: ", block_type, " Val: ", key_mark)
+		thash:set(block_type, 1)
+		ngx.log(ngx.ERR,"types set Key: ", block_type)
+	else 
+		local nval, err = thash:incr(block_type)
+		ngx.log(ngx.ERR,"types : ", blocak_type, " count: ", nval)
 	end
 
 end
 
-local function block_hash_delete(key, value, key_mark)
+local function block_hash_delete(key, value, block_type)
 		
 	local shash = ngx.shared[block_dict_name]
 	local val = shash:get(value)
 	if val then
-		if val == key_mark then
+		if val == block_type then
 			shash:delete(value)
-			ngx.log(ngx.ERR,"delete : ", value, " mark: ", val, " success!")
+			ngx.log(ngx.ERR,"delete : ", value, " val: ", val, " success!")
 		else 
-			ngx.log(ngx.ERR,"conflict key: ", value, " old mark: ", val, " new mark: ", key_mark)
+			ngx.log(ngx.ERR,"conflict key: ", value, " old value: ", val, " del value: ", block_type)
 		end
 	else
-		ngx.log(ngx.ERR,"Not found Key: ", value, " Val: ", key_mark)
+		ngx.log(ngx.ERR,"Not found Key: ", value, " Val: ", block_type)
 	end
 	
-	--[[ TODO clean types dict zone
+	-- clean types dict zone
 	local thash = ngx.shared[types_dict_name]
-	local tval = thash:get(key)
-	if not tval then
-		thash:set(key, key_mark)
-		ngx.log(ngx.ERR,"types set Key: ", key, " Val: ", key_mark)
+	local tval = thash:get(block_type)
+	if tval then
+		local nval, err = thash:incr(block_type, -1)
+		if nval == 0 then
+			thash:delete(block_type)
+			ngx.log(ngx.ERR,"delete types: ", block_type)
+		end
+		ngx.log(ngx.ERR,"types : ", block_type, " count: ", nval)
 	end
-	]]--
 
 end
 local function process_item(key, value, opt)
@@ -153,18 +138,11 @@ local function process_item(key, value, opt)
 	ngx.log(ngx.ERR, "block type: ", block_type)
 	local var_table = string_split(block_type, "+")
 
-	local key_mark = 0
-	for k, v in pairs (var_table) do
-		ngx.log(ngx.ERR, "k: ", k, " v: ", v)
-		ngx.log(ngx.ERR,"key_mark: ", key_mark, " var_mark: ", _var_def[v])
-		key_mark = bit.bor(key_mark, _var_def[v])
-	end
-
 	if opt == "add" then
-		block_hash_insert(key, value, key_mark, block_type)
+		block_hash_insert(key, value, block_type)
 	else 
 		if opt == "del" then
-			block_hash_delete(key, value, key_mark)
+			block_hash_delete(key, value)
 		else 
 			ngx.log(ngx.ERR, "opt ", opt, " not support")
 		end
@@ -386,39 +364,63 @@ local function common_args(collections)
 
         return t
 end
+local function get_var_content(key, vars, request_uri_args, request_headers, request_common_args)
+	local vtab = string_split(key, "-")
+	if #vtab ~= 2 then
+		return ""
+	end
+	local var_type = vtab[1]
+	local var_name = vtab[2]
+	if var_type == "var" then
+		if var_name == "ip" then
+			return vars.remote_addr
+		else if var_name == "host" then
+			return vars.host
+		else if var_name == "path" then
+			return vars.uri
+		end
+	else if var_type == "rh" then
+		return request_headers[var_name]
+	else if var_type == "rca" then
+		return request_common_args[var_name]
+	else if var_type == "rua" then
+		return request_uri_args[var_name]
+	end
+	return ""
+end
+local function construct_serach_key(key, vars, request_uri_args, request_headers, request_common_args)
+	local var_talbe = string_split(key, "+")
+	local rkey = ""
+	for i=1, #var_table do
+		rkey = rkey .. get_var_content(var_table[i])
+	end
+	return rkey
+		
+end
 local function fastacl_check()
 	local var = ngx.var
 	local request_uri_args    = ngx.req.get_uri_args()
 	local request_headers     = ngx.req.get_headers()
 	local request_common_args = common_args({ request_uri_args, request_body, request_cookies })
+	--[[
 	local vars = {ip = var.remote_addr, host = var.host, path = var.uri,
 		      ua = request_headers["user_agent"], token = request_common_args["token"], 
 			query_m = request_uri_args["_m"],
 			device_id = request_common_args["device_id"],
 			referer = request_headers["http_referer"]}
+	--]]
 	local tzone = ngx.shared[types_dict_name]
 	local tys = tzone:get_keys(0)
 	for i=1, #tys do
 		ngx.log(ngx.ERR,"process type: ", tys[i])
-		local kmark = tzone:get(tys[i])
-		ngx.log(ngx.ERR,"kmark: ", kmark)
-		local skey = ""
-		for k, v in ipairs (_key_def) do
-			local vmark = bit.lshift(1, k-1)
-			ngx.log(ngx.ERR,"vmark: ", vmark, " key: ", v)
-			if bit.band(kmark, vmark) ~= 0 and vars[v] then
-				ngx.log(ngx.ERR,"skey: ", skey .. vars[v])
-				skey = skey .. vars[v]
-			end
-		end
+		local skey = construct_serach_key(tys[i], var, request_uri_args, request_headers, request_common_args)
 		if skey ~= "" then
 			local szone = ngx.shared[block_dict_name]
 			ngx.log(ngx.ERR,"seraching key: ", skey)
 			local sval = szone:get(skey)
 			if sval then
 				ngx.log(ngx.ERR,"Hit key: ", skey, " val: ", sval)
-				local md5 = require 'md5'
-				return sval, tys[i] .. ":" .. md5.sumhexa(skey), skey
+				return sval
 			end
 		end
 	end
@@ -454,10 +456,15 @@ local function write_event_log(rulename, rule)
 end
 
 function _M.check()
-	local v, rn, rule = fastacl_check()
+	local v = fastacl_check()
 	if v then
 		-- TODO waf logs
-		write_event_log(rn, rule)
+		local vtab = string_split(v, ":")
+		if vtab ~= 2 then
+			ngx.log(ngx.ERR, "val type error: ", v)
+		else
+			write_event_log(vtab[1], vtab[2])
+		end
 		ngx.status = ngx.HTTP_NO_CONTENT
 		ngx.exit(ngx.status)
 	end
