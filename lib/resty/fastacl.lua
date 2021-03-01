@@ -47,8 +47,9 @@ local function readdir(etcd_cli, key)
     if not etcd_cli then
         return nil, "not inited"
     end
-
-    local res, err = etcd_cli:readdir(key)
+    local opts = {}
+    opts.revision = 0
+    local res, err = etcd_cli:readdir(key, opts)
     if not res then
         ngx.log(ngx.ERR,"failed to get key from etcd: ", err)
         return nil, err
@@ -186,7 +187,9 @@ local function waitdir(etcd_cli, key, modified_index, timeout)
                 return nil, nil, "not inited"
         end
         local opts = {}
-        opts.start_revision = modified_index
+	if modified_index > 1 then 
+		opts.start_revision = modified_index
+	end
         opts.timeout = timeout
         opts.need_cancel = true
 	opts.prev_kv = true
@@ -379,6 +382,9 @@ local function get_var_content(key, vars, request_uri_args, request_headers, req
 	local var_type = vtab[1]
 	local var_name = vtab[2]
 	if var_type == "var" then
+		if var == nil then
+			return ""
+		end
 		if var_name == "ip" then
 			return vars.remote_addr
 		elseif var_name == "host" then
@@ -387,11 +393,17 @@ local function get_var_content(key, vars, request_uri_args, request_headers, req
 			return vars.uri
 		end
 	elseif var_type == "rh" then
-		return request_headers[var_name]
+		if request_headers ~= nil then
+			return request_headers[var_name]
+		end
 	elseif var_type == "rca" then
-		return request_common_args[var_name]
+		if request_common_args ~= nil then
+			return request_common_args[var_name]
+		end
 	elseif var_type == "rua" then
-		return request_uri_args[var_name]
+		if request_uri_args ~= nil then
+			return request_uri_args[var_name]
+		end 
 	end
 	return ""
 end
@@ -403,7 +415,10 @@ local function construct_serach_key(key, vars, request_uri_args, request_headers
 	end
 	local rkey = ""
 	for i=1, #var_table do
-		rkey = rkey .. get_var_content(var_table[i], vars, request_uri_args, request_headers, request_common_args)
+		local varc = get_var_content(var_table[i], vars, request_uri_args, request_headers, request_common_args)
+		if varc ~= nil then
+			rkey = rkey .. varc
+		end
 	end
 	return rkey
 		
